@@ -285,20 +285,16 @@ class ControlPlaneAclManager(daemon_base.DaemonBase):
                 for key, _ in iface_table.items():
                     if not _ip_prefix_in_key(key):
                         continue
-
                     iface_name, iface_cidr = key
-                    ip_ntwrk = ipaddress.ip_network(iface_cidr, strict=False)
-
-                    # For VLAN interfaces, the IP address we want to block is the default gateway (i.e.,
-                    # the first available host IP address of the VLAN subnet)
-                    ip_addr = next(ip_ntwrk.hosts()) if iface_table_name == "VLAN_INTERFACE" else ip_ntwrk.network_address
-
-                    if isinstance(ip_ntwrk, ipaddress.IPv4Network):
-                        block_ip2me_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-d', '{}/{}'.format(ip_addr, ip_ntwrk.max_prefixlen), '-j', 'DROP'])
-                    elif isinstance(ip_ntwrk, ipaddress.IPv6Network):
-                        block_ip2me_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-d', '{}/{}'.format(ip_addr, ip_ntwrk.max_prefixlen), '-j', 'DROP'])
+                    ip_iface = ipaddress.ip_interface(iface_cidr)
+                    if isinstance(ip_iface, ipaddress.IPv4Interface):
+                        block_ip2me_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-d', format(ip_iface.ip) + '/32', '-j', 'DROP'])
+                    elif isinstance(ip_iface, ipaddress.IPv6Interface):
+                        block_ip2me_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-d', format(ip_iface.ip) + '/128', '-j', 'DROP'])
                     else:
-                        self.log_warning("Unrecognized IP address type on interface '{}': {}".format(iface_name, ip_ntwrk))
+                        self.log_warning("Unrecognized IP address type on interface '{}': {}".format(iface_name, ip_iface))
+
+
 
         return block_ip2me_cmds
 
