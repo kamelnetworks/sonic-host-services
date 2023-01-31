@@ -44,7 +44,7 @@ class TestCaclmgrdExternalClientAcl(TestCase):
         iptables_rules_ret, _ = caclmgrd_daemon.get_acl_rules_and_translate_to_iptables_commands('', MockConfigDb())
         test_data['return'] = [tuple(i) for i in test_data['return']]
         iptables_rules_ret = [tuple(i) for i in iptables_rules_ret]
-        self.assertEqual(set(test_data["return"]).issubset(set(iptables_rules_ret)), True)
+        self.assertLessEqual(set(test_data['return']), set(iptables_rules_ret))
         caclmgrd_daemon.iptables_cmd_ns_prefix['asic0'] = ['ip', 'netns', 'exec', 'asic0']
         caclmgrd_daemon.namespace_docker_mgmt_ip['asic0'] = '1.1.1.1'
         caclmgrd_daemon.namespace_mgmt_ip = '2.2.2.2'
