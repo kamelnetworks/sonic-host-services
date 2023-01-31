@@ -86,6 +86,9 @@ class ControlPlaneAclManager(daemon_base.DaemonBase):
     BFD_SESSION_TABLE = "BFD_SESSION_TABLE"
     VXLAN_TUNNEL_TABLE = "VXLAN_TUNNEL"
 
+    MGMT_VRF_TABLE = "MGMT_VRF_CONFIG"
+    VRF_TABLE = "VRF"
+
     BGP_NEIGHBOR = "BGP_NEIGHBOR"
     BGP_PEER_GROUP = "BGP_PEER_GROUP"
     BGP_PEER_RANGE = "BGP_PEER_RANGE"
@@ -586,6 +589,13 @@ class ControlPlaneAclManager(daemon_base.DaemonBase):
         # Add iptables/ip6tables commands to allow all traffic from localhost
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', 'lo', '-j', 'ACCEPT'])
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', 'lo', '-j', 'ACCEPT'])
+        # When executed towards localhost inside VRFs the source interface is the master interface
+        if self.config_db_map[namespace].get_entry(self.MGMT_VRF_TABLE, "vrf_global").get("mgmtVrfEnabled", False):
+            iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', 'mgmt', '-j', 'ACCEPT'])
+            iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', 'mgmt', '-j', 'ACCEPT'])
+        for vrf in self.config_db_map[namespace].get_table(self.VRF_TABLE).keys():
+            iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', vrf, '-j', 'ACCEPT'])
+            iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', vrf, '-j', 'ACCEPT'])
 
 
         if self.bfdAllowed:
