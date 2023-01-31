@@ -83,6 +83,10 @@ class ControlPlaneAclManager(daemon_base.DaemonBase):
     BFD_SESSION_TABLE = "BFD_SESSION_TABLE"
     VXLAN_TUNNEL_TABLE = "VXLAN_TUNNEL"
 
+    BGP_NEIGHBOR = "BGP_NEIGHBOR"
+    BGP_PEER_GROUP = "BGP_PEER_GROUP"
+    BGP_PEER_RANGE = "BGP_PEER_RANGE"
+
     # To specify a port range instead of a single port, use iptables format:
     # separate start and end ports with a colon, e.g., "1000:2000"
     ACL_SERVICES = {
@@ -573,10 +577,26 @@ class ControlPlaneAclManager(daemon_base.DaemonBase):
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-p', 'udp', '--dport', '546:547', '-j', 'ACCEPT'])
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-p', 'udp', '--dport', '546:547', '-j', 'ACCEPT'])
 
-        # Add iptables/ip6tables commands to allow all incoming BGP traffic
-        # TODO: Determine BGP ACLs based on configured device sessions, and remove this blanket acceptance
-        iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
-        iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
+        # Add iptables/ip6tables commands to allow relevant incoming BGP traffic
+        for key, config in self.config_db_map[namespace].get_table(self.BGP_NEIGHBOR).items():
+            # Format can either be VRF|PeerIP or just PeerIP (older format)
+            # Treat it as a potential CIDR to allow for e.g. dynamic BGP neighbors
+            peer_cidr = key[-1] if isinstance(key, tuple) else key
+            local_ip = config['local_addr']
+            name = config.get('name', 'unnamed')
+            peer_network = ipaddress.ip_network(peer_cidr, strict=False)
+            local_address = ipaddress.ip_address(local_ip)
+            if isinstance(peer_network, ipaddress.IPv4Network) and isinstance(local_address, ipaddress.IPv4Address):
+                iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', peer_cidr, '-d', local_ip, '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
+            elif isinstance(peer_network, ipaddress.IPv6Network) and isinstance(local_address, ipaddress.IPv6Address):
+                iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', peer_cidr, '-d', local_ip, '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
+            else:
+                self.log_warning("Unrecognized or inconsistent IP address type on BGP neighbor '{}'".format(key))
+
+        # TODO: BGP_PEER_RANGE and BGP_PEER_GROUP is not implemented yet, so if they are defined allow BGP from everyone
+        if self.config_db_map[namespace].get_table(self.BGP_PEER_RANGE) or self.config_db_map[namespace].get_table(self.BGP_PEER_GROUP):
+            iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
+            iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
 
         # Get current ACL tables and rules from Config DB
         self._tables_db_info = self.config_db_map[namespace].get_table(self.ACL_TABLE)
