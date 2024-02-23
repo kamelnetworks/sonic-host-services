@@ -588,20 +588,44 @@ class ControlPlaneAclManager(daemon_base.DaemonBase):
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-p', 'udp', '--dport', '546:547', '-j', 'ACCEPT'])
 
         # Add iptables/ip6tables commands to allow relevant incoming BGP traffic
+        # TODO: Break this out to a new function to aid writing unit tests
+        #
+        # This supports the following configurations:
+        # - IPv4 neighbors w/ and w/o specified IPv4 source
+        # - IPv6 neighbors w/ and w/o specified IPv6 source
+        # - BGP Unnumbered, i.e. interface bound neighbors using link-local IPv6
         for key, config in self.config_db_map[namespace].get_table(self.BGP_NEIGHBOR).items():
-            # Format can either be VRF|PeerIP or just PeerIP (older format)
-            # Treat it as a potential CIDR to allow for e.g. dynamic BGP neighbors
-            peer_cidr = key[-1] if isinstance(key, tuple) else key
-            local_ip = config['local_addr']
+            # Format can either be VRF|Peer or just Peer (older format)
+            # Peer can be either a IPv4, IPv6, or an interface name.
+            # Treat it as a potential CIDR to allow for e.g. dynamic BGP neighbors,
+            # and if it does not parse then use it as an interface.
+            peer = key[-1] if isinstance(key, tuple) else key
             name = config.get('name', 'unnamed')
-            peer_network = ipaddress.ip_network(peer_cidr, strict=False)
-            local_address = ipaddress.ip_address(local_ip)
-            if isinstance(peer_network, ipaddress.IPv4Network) and isinstance(local_address, ipaddress.IPv4Address):
-                iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', peer_cidr, '-d', local_ip, '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
-            elif isinstance(peer_network, ipaddress.IPv6Network) and isinstance(local_address, ipaddress.IPv6Address):
-                iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', peer_cidr, '-d', local_ip, '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
+            local_ip = config.get('local_addr', None)
+            local_network = None
+            local_match = []
+            if local_ip is not None:
+                # Use network to aid comparision between peer and local network object
+                local_network = ipaddress.ip_network(local_ip)
+                local_match = ['-d', local_ip]
+            try:
+                peer_network = ipaddress.ip_network(peer, strict=False)
+                if local_network is not None and peer_network.__class__ != local_network.__class__:
+                    self.log_warning("Inconsistent IP address types on BGP neighbor '{}'".format(key))
+                    continue
+                # Treat as IPv4/IPv6 address source
+                peer_match = ['-s', peer]
+            except ValueError:
+                # Treat as incoming interface for BGP Unnumbered
+                peer_match = ['-i', peer]
+                local_network = ipaddress.ip_network('fe80::/10')
+                local_match = ['-d', 'fe80::/10']
+            if isinstance(local_network, ipaddress.IPv4Network):
+                iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT'] + peer_match + local_match + ['-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
+            elif isinstance(local_network, ipaddress.IPv6Network):
+                iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT'] + peer_match + local_match + ['-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
             else:
-                self.log_warning("Unrecognized or inconsistent IP address type on BGP neighbor '{}'".format(key))
+                self.log_warning("Unrecognized IP address type on BGP neighbor '{}'".format(key))
 
         # TODO: BGP_PEER_RANGE and BGP_PEER_GROUP is not implemented yet, so if they are defined allow BGP from everyone
         if self.config_db_map[namespace].get_table(self.BGP_PEER_RANGE) or self.config_db_map[namespace].get_table(self.BGP_PEER_GROUP):
