@@ -102,7 +102,8 @@ class TestCaclmgrdSoc(TestCase):
                 mocked_subprocess.Popen.assert_has_calls(test_data["expected_subprocess_calls"], any_order=True)
 
 
-    def test_get_ipv4_networks_from_interface_table(self):
+    @patchfs
+    def test_get_ipv4_networks_from_interface_table(self, fs):
         if not os.path.exists(DBCONFIG_PATH):
             fs.create_file(DBCONFIG_PATH) # fake database_config.json
 

@@ -716,10 +716,10 @@ class ControlPlaneAclManager(logger.Logger):
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', 'lo', '-j', 'ACCEPT'])
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', 'lo', '-j', 'ACCEPT'])
         # When executed towards localhost inside VRFs the source interface is the master interface
-        if self.config_db_map[namespace].get_entry(self.MGMT_VRF_TABLE, "vrf_global").get("mgmtVrfEnabled", False):
+        if config_db_connector.get_entry(self.MGMT_VRF_TABLE, "vrf_global").get("mgmtVrfEnabled", False):
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', 'mgmt', '-j', 'ACCEPT'])
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', 'mgmt', '-j', 'ACCEPT'])
-        for vrf in self.config_db_map[namespace].get_table(self.VRF_TABLE).keys():
+        for vrf in config_db_connector.get_table(self.VRF_TABLE).keys():
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', vrf, '-j', 'ACCEPT'])
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', vrf, '-j', 'ACCEPT'])
 
@@ -790,7 +790,7 @@ class ControlPlaneAclManager(logger.Logger):
         # - IPv4 neighbors w/ and w/o specified IPv4 source
         # - IPv6 neighbors w/ and w/o specified IPv6 source
         # - BGP Unnumbered, i.e. interface bound neighbors using link-local IPv6
-        for key, config in self.config_db_map[namespace].get_table(self.BGP_NEIGHBOR).items():
+        for key, config in config_db_connector.get_table(self.BGP_NEIGHBOR).items():
             # Format can either be VRF|Peer or just Peer (older format)
             # Peer can be either a IPv4, IPv6, or an interface name.
             # Treat it as a potential CIDR to allow for e.g. dynamic BGP neighbors,
@@ -824,7 +824,7 @@ class ControlPlaneAclManager(logger.Logger):
                 self.log_warning("Unrecognized IP address type on BGP neighbor '{}'".format(key))
 
         # TODO: BGP_PEER_RANGE and BGP_PEER_GROUP is not implemented yet, so if they are defined allow BGP from everyone
-        if self.config_db_map[namespace].get_table(self.BGP_PEER_RANGE) or self.config_db_map[namespace].get_table(self.BGP_PEER_GROUP):
+        if config_db_connector.get_table(self.BGP_PEER_RANGE) or config_db_connector.get_table(self.BGP_PEER_GROUP):
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-p', 'tcp', '--dport', '179', '-j', 'ACCEPT'])
 
