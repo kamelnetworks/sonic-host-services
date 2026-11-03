@@ -716,7 +716,8 @@ class ControlPlaneAclManager(logger.Logger):
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', 'lo', '-j', 'ACCEPT'])
         iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', 'lo', '-j', 'ACCEPT'])
         # When executed towards localhost inside VRFs the source interface is the master interface
-        if config_db_connector.get_entry(self.MGMT_VRF_TABLE, "vrf_global").get("mgmtVrfEnabled", False):
+        # ConfigDB stores booleans as the strings "true"/"false"; compare, don't test truthiness
+        if config_db_connector.get_entry(self.MGMT_VRF_TABLE, "vrf_global").get("mgmtVrfEnabled", "false") == "true":
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['iptables', '-A', 'INPUT', '-s', '127.0.0.1', '-i', 'mgmt', '-j', 'ACCEPT'])
             iptables_cmds.append(self.iptables_cmd_ns_prefix[namespace] + ['ip6tables', '-A', 'INPUT', '-s', '::1', '-i', 'mgmt', '-j', 'ACCEPT'])
         for vrf in config_db_connector.get_table(self.VRF_TABLE).keys():
@@ -1320,8 +1321,14 @@ class ControlPlaneAclManager(logger.Logger):
 
         subscribe_feature_table = swsscommon.SubscriberStateTable(config_db_connector, self.FEATURE_TABLE)
         sel.addSelectable(subscribe_feature_table)
+
+        # The localhost-in-VRF rules depend on the management VRF state, so a change must rebuild them
+        subscribe_mgmt_vrf_table = swsscommon.SubscriberStateTable(config_db_connector, self.MGMT_VRF_TABLE)
+        sel.addSelectable(subscribe_mgmt_vrf_table)
         # Map of Namespace <--> susbcriber table's object
         config_db_subscriber_table_map = {}
+        # Map of Namespace <--> VRF table subscriber; the rules carry one localhost ACCEPT pair per VRF
+        vrf_subscriber_table_map = {}
 
         # Loop through all asic namespaces (if present) and host namespace (DEFAULT_NAMESPACE)
         for namespace in list(self.config_db_map.keys()):
@@ -1340,6 +1347,10 @@ class ControlPlaneAclManager(logger.Logger):
             config_db_subscriber_table_map[namespace] = []
             config_db_subscriber_table_map[namespace].append(subscribe_acl_table)
             config_db_subscriber_table_map[namespace].append(subscribe_acl_rule_table)
+            # Subscribe to notifications when VRFs are added or removed
+            subscribe_vrf_table = swsscommon.SubscriberStateTable(acl_db_connector, self.VRF_TABLE)
+            sel.addSelectable(subscribe_vrf_table)
+            vrf_subscriber_table_map[namespace] = subscribe_vrf_table
 
         # Get the ACL rule table seprator
         acl_rule_table_seprator = subscribe_acl_rule_table.getTableNameSeparator()
@@ -1426,6 +1437,21 @@ class ControlPlaneAclManager(logger.Logger):
                         self.update_dash_ha_rules(namespace, key, op, fvs)
 
                 self.handle_feature_state_events(subscribe_feature_table, namespace, ctrl_plane_acl_notification)
+
+                while True:
+                    key, op, fvs = subscribe_mgmt_vrf_table.pop()
+                    if not key:
+                        break
+                    self.log_info("Management VRF config '{}' {} in namespace '{}', rebuilding rules".format(key, op, namespace))
+                    ctrl_plane_acl_notification.add(namespace)
+
+            # VRF add/remove in the namespace changes the localhost-in-VRF rules
+            while True:
+                key, op, fvs = vrf_subscriber_table_map[namespace].pop()
+                if not key:
+                    break
+                self.log_info("VRF '{}' {} in namespace '{}', rebuilding rules".format(key, op, namespace))
+                ctrl_plane_acl_notification.add(namespace)
 
             # Pop data of both Subscriber Table object of namespace that got config db acl table event
             for table in config_db_subscriber_table_map[namespace]:
