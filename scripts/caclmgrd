@@ -1468,7 +1468,15 @@ class ControlPlaneAclManager(logger.Logger):
                     # Check ACL Rule notification and make sure Rule point to ACL Table which is Controlplane
                     else:
                         acl_table = key.split(acl_rule_table_seprator)[0]
-                        if self.config_db_map[namespace].get_table(self.ACL_TABLE)[acl_table]["type"] == self.ACL_TABLE_TYPE_CTRLPLANE:
+                        acl_table_entry = self.config_db_map[namespace].get_table(self.ACL_TABLE).get(acl_table)
+                        if acl_table_entry is None:
+                            # The rule's table is not (or no longer) in ACL_TABLE. This happens when rules are
+                            # written before their table, when a table is removed while its rules remain, or
+                            # when the rule references a table that does not exist. Don't crash on it: a
+                            # matching ACL_TABLE event will trigger a full update on its own.
+                            self.log_info("Ignoring ACL_RULE '{}' in namespace '{}': ACL table '{}' not found in ACL_TABLE"
+                                          .format(key, namespace, acl_table))
+                        elif acl_table_entry.get("type") == self.ACL_TABLE_TYPE_CTRLPLANE:
                             ctrl_plane_acl_notification.add(namespace)
 
             # Update the Control Plane ACL of the namespace that got config db acl table event
