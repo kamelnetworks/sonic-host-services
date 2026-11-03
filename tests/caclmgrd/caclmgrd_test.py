@@ -6,7 +6,7 @@ from unittest import TestCase, mock
 from tests.common.mock_configdb import MockConfigDb
 from sonic_py_common.general import load_module_from_source
 import threading
-import sys
+import time
 
 
 DBCONFIG_PATH = "/var/run/redis/sonic-db/database_config.json"
@@ -172,6 +172,102 @@ class TestCaclmgrd(TestCase):
         manager.update_dhcp_acl.assert_called()
         manager.setup_dhcp_chain.assert_called()
 
+    @patch("caclmgrd.swsscommon")
+    @patch("os.geteuid", return_value=0)
+    @patch("os.kill")
+    @patch("signal.SIGKILL", return_value=9)
+    @patch("sys.exit")
+    def test_run_acl_rule_for_unknown_table(
+        self,
+        mock_exit,
+        mock_sigkill,
+        mock_kill,
+        mock_geteuid,
+        mock_swsscommon,
+    ):
+        """
+        An ACL_RULE event whose table is absent from ACL_TABLE must not crash
+        run() (kamelnetworks/sonic-buildimage#8). The rule is skipped with a
+        log line and rules of known CTRLPLANE tables are still processed.
+        """
+        MockConfigDb.set_config_db({
+            "DEVICE_METADATA": {"localhost": {}},
+            "FEATURE": {},
+            "ACL_TABLE": {
+                "SSH_ONLY": {"policy_desc": "SSH_ONLY", "services": "SSH", "stage": "ingress", "type": "CTRLPLANE"},
+            },
+            "ACL_RULE": {
+                "ACL-IPV4-PERMIT-ALL-EXCEPT-BGP|RULE_1": {"PRIORITY": "9999", "PACKET_ACTION": "ACCEPT", "IP_PROTOCOL": "6", "L4_DST_PORT": "179"},
+                "SSH_ONLY|RULE_1": {"PRIORITY": "9999", "PACKET_ACTION": "ACCEPT", "IP_PROTOCOL": "6", "L4_DST_PORT": "22"},
+            },
+        })
+
+        mock_kill.return_value = None
+        mock_swsscommon.SonicDBConfig.getDbId.side_effect = lambda db_name: (
+            6 if db_name == "STATE_DB" else 1
+        )
+        mock_state_db_connector = MagicMock()
+        mock_config_db_connector = MagicMock()
+        mock_swsscommon.DBConnector.side_effect = [mock_state_db_connector, mock_config_db_connector, mock_state_db_connector]
+        mock_swsscommon.Select.OBJECT = 1
+        mock_swsscommon.Select.return_value.select.return_value = (
+            mock_swsscommon.Select.OBJECT,
+            MagicMock(),
+        )
+        mock_swsscommon.SubscriberStateTable.return_value.getTableNameSeparator.return_value = "|"
+        # One config DB event: the ACL_TABLE subscriber has nothing, the ACL_RULE
+        # subscriber delivers a rule for a table that is not in ACL_TABLE followed
+        # by a rule for a known CTRLPLANE table. All subscriber tables share one
+        # mock, so the pops are consumed in this order.
+        pop_values = [
+            ("ACL-IPV4-PERMIT-ALL-EXCEPT-BGP|RULE_1", "SET", [("PRIORITY", "9999"), ("PACKET_ACTION", "ACCEPT"), ("IP_PROTOCOL", "6"), ("L4_DST_PORT", "179")]),
+            ("", None, None),
+            ("SSH_ONLY|RULE_1", "SET", [("PRIORITY", "9999"), ("PACKET_ACTION", "ACCEPT"), ("IP_PROTOCOL", "6"), ("L4_DST_PORT", "22")]),
+            ("", None, None),
+        ]
+        mock_swsscommon.SubscriberStateTable.return_value.pop.side_effect = pop_values
+        mock_swsscommon.CastSelectableToRedisSelectObj.return_value.getDbConnector.return_value.getNamespace.return_value = ""
+        # Exactly one select() iteration; the second getDbId() raises StopIteration
+        # and ends run().
+        mock_swsscommon.CastSelectableToRedisSelectObj.return_value.getDbConnector.return_value.getDbId.side_effect = [4]
+
+        self.caclmgrd.ControlPlaneAclManager.get_namespace_mgmt_ip = MagicMock()
+        self.caclmgrd.ControlPlaneAclManager.get_namespace_mgmt_ipv6 = MagicMock()
+        manager = self.caclmgrd.ControlPlaneAclManager("caclmgrd")
+
+        # caclmgrd.swsscommon is patched, so the constructor got a MagicMock
+        # connector. Use the mock config DB so that the ACL_TABLE lookup in
+        # run() sees the real table contents.
+        manager.config_db_map = {"": MockConfigDb()}
+        manager.log_info = MagicMock()
+        manager.log_error = MagicMock()
+        manager.DualToR = False
+        manager.UPDATE_DELAY_SECS = 0.1
+        manager.iptables_cmd_ns_prefix = {"": []}
+        manager.lock = {"": threading.Lock()}
+        manager.num_changes = {"": 0}
+        manager.update_thread = {"": None}
+        manager.update_control_plane_acls = MagicMock()
+
+        # Before the fix this raised KeyError: 'ACL-IPV4-PERMIT-ALL-EXCEPT-BGP'
+        with self.assertRaises(StopIteration):
+            manager.run()
+
+        skipped = [
+            c for c in manager.log_info.call_args_list
+            if "ACL-IPV4-PERMIT-ALL-EXCEPT-BGP|RULE_1" in str(c) and "not found in ACL_TABLE" in str(c)
+        ]
+        self.assertEqual(len(skipped), 1, manager.log_info.call_args_list)
+        manager.log_error.assert_not_called()
+
+        # run() applies the ACLs once at startup; the rule for the known
+        # CTRLPLANE table must still trigger a second update from the thread.
+        for _ in range(50):
+            if manager.update_control_plane_acls.call_count >= 2:
+                break
+            time.sleep(0.1)
+        self.assertEqual(manager.update_control_plane_acls.call_count, 2)
+        self.assertEqual(manager.update_control_plane_acls.call_args[0][0], "")
 
     @patch("caclmgrd.swsscommon")
     @patch("os.geteuid", return_value=0)
