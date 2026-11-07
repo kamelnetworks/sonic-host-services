@@ -215,11 +215,13 @@ class TestCaclmgrd(TestCase):
             MagicMock(),
         )
         mock_swsscommon.SubscriberStateTable.return_value.getTableNameSeparator.return_value = "|"
-        # One config DB event: the ACL_TABLE subscriber has nothing, the ACL_RULE
-        # subscriber delivers a rule for a table that is not in ACL_TABLE followed
-        # by a rule for a known CTRLPLANE table. All subscriber tables share one
-        # mock, so the pops are consumed in this order.
+        # One ACL DB event (db_id 4, so the CONFIG_DB-only subscribers are not
+        # popped). All subscriber tables share one mock, so the pops are
+        # consumed in this order: the VRF subscriber has nothing, the ACL_TABLE
+        # subscriber delivers a rule for a table that is not in ACL_TABLE, and
+        # the ACL_RULE subscriber delivers a rule for a known CTRLPLANE table.
         pop_values = [
+            ("", None, None),
             ("ACL-IPV4-PERMIT-ALL-EXCEPT-BGP|RULE_1", "SET", [("PRIORITY", "9999"), ("PACKET_ACTION", "ACCEPT"), ("IP_PROTOCOL", "6"), ("L4_DST_PORT", "179")]),
             ("", None, None),
             ("SSH_ONLY|RULE_1", "SET", [("PRIORITY", "9999"), ("PACKET_ACTION", "ACCEPT"), ("IP_PROTOCOL", "6"), ("L4_DST_PORT", "22")]),
