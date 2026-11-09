@@ -211,6 +211,18 @@ class TestCaclmgrdVxlan(TestCase):
         self.run_patched(fs, body)
 
     @patchfs
+    def test_invalid_set_removes_previous_permit(self, fs):
+        def body(mgr):
+            mgr.update_vxlan_tunnel('vtep1', 'SET', [('src_ip', '10.1.0.32')])
+            self.assertEqual(self.ipt.count('10.1.0.32'), 1)
+            mgr.update_vxlan_tunnel('vtep1', 'SET', [('src_ip', 'invalid')])
+            self.assertEqual(mgr.vxlan_src_ips, {})
+            self.assertEqual(self.ipt.count('10.1.0.32'), 0)
+            self.assertEqual(mgr.vxlan_installed[''], set())
+            self.assertFalse(mgr.vxlan_rules_pending())
+        self.run_patched(fs, body)
+
+    @patchfs
     def test_invalid_src_ip_is_ignored(self, fs):
         def body(mgr):
             mgr.update_vxlan_tunnel('vtep1', 'SET', [('src_ip', 'not-an-ip')])

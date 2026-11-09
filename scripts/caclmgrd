@@ -1226,13 +1226,14 @@ class ControlPlaneAclManager(logger.Logger):
             self.sync_vxlan_rules(namespace)
 
     def update_vxlan_tunnel(self, key, op, fvs):
+        """Invalid SETs withdraw this tunnel's prior permit (fail closed)."""
         src_ip = dict(fvs).get('src_ip', '') if op == 'SET' else ''
         if src_ip:
             try:
                 # Canonical form: iptables matches addresses by value, so two spellings must not diverge
                 src_ip = str(ipaddress.ip_address(src_ip))
             except ValueError:
-                self.log_error("Ignoring vxlan tunnel '{}' with invalid source ip '{}'".format(key, src_ip))
+                self.log_error("Withdrawing vxlan tunnel '{}' with invalid source ip '{}'".format(key, src_ip))
                 src_ip = ''
         elif op == 'SET':
             self.log_info("Received vxlan tunnel configuration without source ip")
